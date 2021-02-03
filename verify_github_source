@@ -1,0 +1,91 @@
+#!/bin/bash
+
+#####################################################################
+#                                                                   #
+#  Name:           Verify GitHub Source                             #
+#                                                                   #
+#  Description:    Run a script that downloads scripts from source  #
+#                  control rather than copy/pasting. This code      #
+#                  verifies the download with a hash generated      #
+#                  locally at commit time by the commiter.          #
+#                  Note that in-line comments are desciptions       #
+#                  of single-letter flags.                          #
+#                                                                   #
+#  Version:        1.0                                              #
+#                                                                   #
+#  Last Edited By: Greg Sheppard                                    #
+#                                                                   #
+#  Date:           2021-02-03                                       #
+#                                                                   #
+#  https://formulae.brew.sh/formula/boxes                           #
+#####################################################################
+
+set -o errexit
+
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
+
+# use .config file or pass arguments; arguments win if both
+[[ -r .config ]] && source .config
+readonly OWNER="${4:-$OWNER}"
+readonly REPO="${5:-$REPO}"
+readonly REPO_PATH="${6:-$REPO_PATH}"
+readonly API_USER="${7:-$API_USER}"
+readonly API_KEY="${8:-$API_KEY}"
+readonly SHASUM_ALG="${9:-$SHASUM_ALG}"
+readonly KNOWN_HASH="${10:-$KNOWN_HASH}"
+readonly REPO_BRANCH="${11:-$REPO_BRANCH}"
+
+function error() {
+  echo "[$(date '+%FT%T%z')] ERROR: $*" >&2
+}
+
+function get_script_content() {
+  response="$(
+    curl \
+      --silent \
+      --show-error \
+      --fail \
+      --tlsv1.2 \
+      --header "Accept: application/vnd.github.v3+json" \
+      --get --data-urlencode "ref=$REPO_BRANCH" \
+      --user "$API_USER:$API_KEY" \
+      "https://api.github.com/repos/$OWNER/$REPO/contents/$REPO_PATH"
+  )"
+  if which -s jq; then # silent
+    parsed_download="$(
+      echo "$response" |
+        jq --raw-output .content |
+        base64 --decode
+    )"
+  else
+    parsed_download="$(
+      echo "$response" |
+        grep \
+          --extended-regexp \
+          --only-matching \
+          --regexp='"content":\s*".*"' |
+        cut -d ':' -f 2 |         # delimiter, field
+        tr -d '"' | tr -d '\\n' | # delete
+        base64 --decode
+    )"
+  fi
+}
+
+function validate() {
+  response_hash="$(
+    echo "$parsed_download" |
+      shasum --algorithm "$SHASUM_ALGORITHM" |
+      awk '{print $1}'
+  )"
+  if [[ "$response_hash" != "$KNOWN_HASH" ]]; then
+    error "FAIL"
+    exit 1
+  fi
+}
+
+function main() {
+  get_script_content
+  validate
+}
+
+main
